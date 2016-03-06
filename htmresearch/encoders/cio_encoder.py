@@ -18,16 +18,19 @@
 #
 # http://numenta.org/licenses/
 # ----------------------------------------------------------------------
-
 import itertools
+import numpy
 import os
-from collections import Counter
+
+import random
 
 from cortipy.cortical_client import CorticalClient, RETINA_SIZES
 from cortipy.exceptions import UnsuccessfulEncodingError
 from htmresearch.encoders import EncoderTypes
 from htmresearch.encoders.language_encoder import LanguageEncoder
 from htmresearch.support.text_preprocess import TextPreprocess
+
+from nupic.bindings.math import SparseMatrix
 
 
 DEFAULT_RETINA = "en_synonymous"
@@ -45,15 +48,24 @@ class CioEncoder(LanguageEncoder):
 
   def __init__(self, retina=DEFAULT_RETINA, retinaScaling=1.0, cacheDir=None,
                verbosity=0, fingerprintType=EncoderTypes.document,
-               unionSparsity=20.0, apiKey=None):
+               unionSparsity=0.20, apiKey=None,
+               maxSparsity=0.50):
     """
     @param retina          (str)      Cortical.io retina, either "en_synonymous"
                                       or "en_associative".
-    @param retinaScaling   (float)    Scales the dimensions of the SDR topology,
-                                      where the width and height are both 128.
+    @param retinaScaling   (float)    Scale each dimension of the SDR bitmap
+                                      by this factor.
     @param cacheDir        (str)      Where to cache results of API queries.
     @param verbosity       (int)      Amount of info printed out, 0, 1, or 2.
     @param fingerprintType (Enum)     Specify word- or document-level encoding.
+    @param unionSparsity   (float)    Any union'ing done in this encoder will
+                                      stop once this sparsity is reached.
+    @param maxSparsity     (float)    The maximum sparsity of the returned
+                                      bitmap. If the percentage of bits in the
+                                      encoding is > maxSparsity, it will be
+                                      randomly subsampled.
+
+    TODO: replace enum with a simple string
     """
     if apiKey is None and "CORTICAL_API_KEY" not in os.environ:
       print ("Missing CORTICAL_API_KEY environment variable. If you have a "
@@ -62,7 +74,7 @@ class CioEncoder(LanguageEncoder):
         "http://www.cortical.io/resources_apikey.html")
       raise OSError("Missing API key.")
 
-    super(CioEncoder, self).__init__(unionSparsity = unionSparsity)
+    super(CioEncoder, self).__init__(unionSparsity=unionSparsity)
 
     if cacheDir is None:
       root = os.path.dirname(os.path.realpath(__file__))
@@ -71,30 +83,74 @@ class CioEncoder(LanguageEncoder):
     self.apiKey = apiKey if apiKey else os.environ["CORTICAL_API_KEY"]
     self.client = CorticalClient(self.apiKey, retina=retina, cacheDir=cacheDir)
 
+    self.cacheDir = cacheDir
+    self.client = CorticalClient(self.apiKey,
+                                 retina=retina,
+                                 cacheDir=self.cacheDir)
+
     self._setDimensions(retina, retinaScaling)
 
     self.fingerprintType = fingerprintType
     self.description = ("Cio Encoder", 0)
 
     self.verbosity = verbosity
+    self.maxSparsity = maxSparsity
+
+
+  @property
+  def cacheDir(self):
+     """ cacheDir property with unique property that if the user originally
+     passed in an explicit cacheDir to CioEncoder constructor, then that value
+     is used.  If not, the default value is calculated.  This is done in
+     conjunction with _setCacheDir() which only sets self._cacheDir if a value
+     is provided in the setter.
+     """
+     if hasattr(self, "_cacheDir"):
+       return self._cacheDir
+
+     # If user never explicitly sets cacheDir, return calculated cacheDir
+     root = os.path.dirname(os.path.realpath(__file__))
+     return os.path.join(root, "CioCache")
+
+
+  @cacheDir.setter
+  def cacheDir(self, value):
+    if value:
+      # Only set cacheDir if value explicitly provided
+      self._cacheDir = value
+
+
+  def __setstate__(self, state):
+    """ Called when CioEncoder is unpickled per pickle protocol.  This includes
+    a mechanism to gracefully re-init the CorticalClient instance with a
+    calculated cacheDir, in the event that the previously pickled
+    CorticalClient instance includes a cacheDir that does not exist, which is
+    likely the case when a model is trained on one machine for reuse elsewhere.
+    """
+    if "_cacheDir" not in state:
+      state["client"] = CorticalClient(state["apiKey"],
+                                       retina=state["client"].retina,
+                                       cacheDir=self.cacheDir)
+
+    self.__dict__ = state
 
 
   def _setDimensions(self, retina, scalingFactor):
-    if scalingFactor < 0 or scalingFactor > 1:
+    if scalingFactor <= 0 or scalingFactor > 1:
       raise ValueError("Retina can only be scaled by values between 0 and 1.")
 
     retinaDim = RETINA_SIZES[retina]["width"]
 
-    self.retinaScaling = scalingFactor
     self.width = int(retinaDim * scalingFactor)
     self.height = int(retinaDim * scalingFactor)
+    self.retinaScaling = float(self.width)/retinaDim
     self.n = self.width * self.height
 
 
   def encode(self, text):
     """
     Encodes the input text w/ a cortipy client. The client returns a
-    dictionary of "fingerprint" info, including the SDR bitmap.
+    dictionary of "fingerprint" info, including the SDR bitmap as a numpy.array.
 
     NOTE: returning this fingerprint dict differs from the base class spec.
 
@@ -103,13 +159,20 @@ class CioEncoder(LanguageEncoder):
                                       encoding is at
                                       encoding["fingerprint"]["positions"].
     """
-    if not text:
-      return None
+    if not isinstance(text, str) and not isinstance(text, unicode):
+      raise TypeError("Expected a string input but got input of type {}."
+                      .format(type(text)))
+
     try:
       if self.fingerprintType == EncoderTypes.document:
         encoding = self.client.getTextBitmap(text)
+
       elif self.fingerprintType == EncoderTypes.word:
         encoding = self.getUnionEncoding(text)
+
+      else:
+        encoding = self.client.getBitmap(text)
+
     except UnsuccessfulEncodingError:
       if self.verbosity > 0:
         print ("\tThe client returned no encoding for the text \'{0}\', so "
@@ -118,6 +181,41 @@ class CioEncoder(LanguageEncoder):
       encoding = self._subEncoding(text)
 
     return self.finishEncoding(encoding)
+
+
+  def getUnionEncodingFromTokens(self, tokens):
+    """
+    Create a single, sparsified bitmap from a union of bitmaps for given tokens
+
+    @param  tokens  (sequence) A sequence of tokens
+    @return         (sequence) Bitmap
+    """
+    # Accumulate counts by inplace-adding sparse matrices
+    counts = SparseMatrix()
+    counts.resize(1, self.width*self.height)
+
+    # Pre-allocate buffer sparse matrix
+    sparseBitmap = SparseMatrix()
+    sparseBitmap.resize(1, self.width*self.height)
+
+    for t in tokens:
+      bitmap = self._getWordBitmap(t)
+      sparseBitmap.setRowFromSparse(0, bitmap, [1]*len(bitmap))
+      counts += sparseBitmap
+
+    numNonZeros = counts.nNonZerosOnRow(0)
+
+    # Add some jitter to aid in tie-breaking during sort
+    jitterValues = tuple((random.random()/100)+0.1
+                         for _ in xrange(numNonZeros))
+    sparseBitmap.setRowFromSparse(0, counts.nonZeroCols(), jitterValues)
+    counts += sparseBitmap
+
+    maxSparsity = int(self.unionSparsity * self.n)
+    w = min(numNonZeros, maxSparsity)
+
+    # Return top w most popular positions
+    return  tuple(x[1] for x in counts.getNonZerosSorted())[:w]
 
 
   def getUnionEncoding(self, text):
@@ -130,13 +228,7 @@ class CioEncoder(LanguageEncoder):
     """
     tokens = TextPreprocess().tokenize(text)
 
-    # Count the ON bits represented in the encoded tokens.
-    counts = Counter()
-    for t in tokens:
-      bitmap = self.client.getBitmap(t)["fingerprint"]["positions"]
-      counts.update(bitmap)
-
-    positions = self.sparseUnion(counts)
+    positions = self.getUnionEncodingFromTokens(tokens)
 
     # Populate encoding
     encoding = {
@@ -155,6 +247,52 @@ class CioEncoder(LanguageEncoder):
     return encoding
 
 
+  def getWindowEncoding(self, tokens, minSparsity=0.0):
+    """
+    The encodings simulate a "sliding window", where the encoding representation
+    of a given token is a union of its bitmap with the immediately previous
+    tokens' bitmaps, up to the maximum sparsity. The returned list only includes
+    those windows with sparsities larger than the minimum.
+
+    @param tokens           (list)  Tokenized string.
+    @param minSparsity      (float) Only window encodings denser than this value
+                                    will be included.
+    @return windowBitmaps   (list)  Dict for each token, with entries for the
+                                    token string, sparsity float, and bitmap
+                                    numpy array.
+    """
+    if self.fingerprintType != EncoderTypes.word:
+      print ("Although the encoder type is not set for words, the window "
+        "encodings use word-level fingerprints.")
+
+    bitmaps = tuple(numpy.array(self._getWordBitmap(t)) for t in tokens)
+
+    windowBitmaps = []
+    for tokenIndex, windowBitmap in enumerate(bitmaps):
+      # Each index in the tokens list is the end of a possible window.
+      for i in reversed(xrange(tokenIndex)):
+        # From the current token, increase the window by successively adding the
+        # previous tokens.
+        windowSparsity = len(windowBitmap) / float(self.n)
+        nextSparsity = len(bitmaps[i]) / float(self.n)
+        if windowSparsity + nextSparsity > self.unionSparsity:
+          # stopping criterion reached -- window is full
+          break
+        else:
+          # add bitmap to the current window bitmap
+          windowBitmap = numpy.union1d(windowBitmap, bitmaps[i])
+
+      sparsity = len(windowBitmap) / float(self.n)
+      if sparsity > minSparsity:
+        # only include windows of sufficient density
+        windowBitmaps.append(
+          {"text": tokens[i:tokenIndex+1],
+           "sparsity": sparsity,
+           "bitmap": numpy.array(windowBitmap)})
+
+    return windowBitmaps
+
+
   def finishEncoding(self, encoding):
     """
     Scale the fingerprint of the encoding dict (if specified) and fill the
@@ -166,47 +304,40 @@ class CioEncoder(LanguageEncoder):
     """
     if self.retinaScaling != 1:
       encoding["fingerprint"]["positions"] = self.scaleEncoding(
-        encoding["fingerprint"]["positions"], self.retinaScaling)
+        encoding["fingerprint"]["positions"], self.retinaScaling**2)
       encoding["width"] = self.width
       encoding["height"] = self.height
+
+    encoding["fingerprint"]["positions"] = numpy.array(
+      encoding["fingerprint"]["positions"])
 
     encoding["sparsity"] = len(encoding["fingerprint"]["positions"]) / float(
       (encoding["width"] * encoding["height"]))
 
+    # Reduce sparsity if needed
+    if encoding["sparsity"] > self.maxSparsity:
+      self.reduceSparsity(encoding, self.maxSparsity)
+
     return encoding
+
+
+  def _getWordBitmap(self, term):
+    """
+    Return a bitmap for the word. If the Cortical.io API can't encode, cortipy
+    will use a random encoding for the word.
+    """
+    return self.client.getBitmap(term)["fingerprint"]["positions"]
 
 
   def encodeIntoArray(self, inputText, output):
     """
-    See method description in language_encoder.py. It is expected the inputText
-    is a single word/token (str).
-
-    NOTE: nupic Encoder class method encodes output in place as sparse array
-    (commented out below), but this method returns a bitmap.
+    Encodes inputText and puts the encoded value into the numpy output array,
+    which is a 1-D array of length returned by getWidth().
     """
-    if not isinstance(inputText, str):
-      raise TypeError("Expected a string input but got input of type {}."
-                      .format(type(inputText)))
-
-    # Encode with term endpoint of Cio API
-    try:
-      encoding = self.client.getBitmap(inputText)
-    except UnsuccessfulEncodingError:
-      if self.verbosity > 0:
-        print ("\tThe client returned no encoding for the text \'{0}\', so "
-               "we'll use the encoding of the token that is least frequent in "
-               "the corpus.".format(inputText))
-      encoding = self._subEncoding(inputText)
-
-    # Populate output with sparse encoding
-    for i in xrange(len(output)):
-      if i in encoding["fingerprint"]["positions"]:
-        output[i] = 1
-      else:
-        # set OFF bits back to 0 b/c output is still populated from last encoding
-        output[i] = 0
-
-    return self.finishEncoding(encoding)
+    encoding = self.encode(inputText)
+    output[:] = 0
+    if encoding["fingerprint"]["positions"].size > 0:
+      output[encoding["fingerprint"]["positions"]] = 1
 
 
   def decode(self, encoding, numTerms=10):
@@ -226,7 +357,7 @@ class CioEncoder(LanguageEncoder):
     """
     terms = self.client.bitmapToTerms(encoding, numTerms=numTerms)
     # Convert cortipy response to list of tuples (term, weight)
-    return [((term["term"], term["score"])) for term in terms]
+    return [(term["term"], term["score"]) for term in terms]
 
 
   def _subEncoding(self, text, method="keyword"):
@@ -236,20 +367,20 @@ class CioEncoder(LanguageEncoder):
                                               An empty dictionary of the text
                                               could not be encoded.
     """
-    tokens = list(itertools.chain.from_iterable(
-        [t.split(',') for t in self.client.tokenize(text)]))
     try:
       if method == "df":
-        encoding = min([self.client.getBitmap(t) for t in tokens],
-                       key=lambda x: x["df"])
+        tokens = list(itertools.chain.from_iterable(
+          [t.split(",") for t in self.client.tokenize(text)]))
+        encoding = min(
+          [self.client.getBitmap(t) for t in tokens], key=lambda x: x["df"])
       elif method == "keyword":
         encoding = self.getUnionEncoding(text)
       else:
-        raise ValueError("method must be either \'df\' or \'keyword\'")
+        raise ValueError("method must be either 'df' or 'keyword'")
     except UnsuccessfulEncodingError:
       if self.verbosity > 0:
         print ("\tThe client returned no substitute encoding for the text "
-               "\'{0}\', so we encode with None.".format(text))
+               "'{}', so we encode with None.".format(text))
       encoding = None
 
     return encoding
@@ -308,3 +439,27 @@ class CioEncoder(LanguageEncoder):
 
   def getDescription(self):
     return self.description
+
+
+  def densifyPattern(self, bitmap):
+    """Return a numpy array of 0s and 1s to represent the given bitmap."""
+    sparsePattern = numpy.zeros(self.n)
+    for i in bitmap:
+      sparsePattern[i] = 1.0
+    return sparsePattern
+
+
+  def reduceSparsity(self, encoding, maxSparsity):
+    """Reduce the sparsity of the encoding down to maxSparsity"""
+
+    desiredBits = maxSparsity*encoding["width"]*encoding["height"]
+    bitmap = encoding["fingerprint"]["positions"]
+
+    # Choose a random subsampling of the bits but seed the random number
+    # generator so we get consistent bitmaps
+    numpy.random.seed(bitmap.sum())
+    encoding["fingerprint"]["positions"] = (
+      numpy.random.permutation(bitmap)[0:desiredBits] )
+
+    encoding["sparsity"] = len(encoding["fingerprint"]["positions"]) / float(
+      (encoding["width"] * encoding["height"]))

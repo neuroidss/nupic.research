@@ -50,7 +50,7 @@ class LanguageEncoder(object):
   - getDescription() returns a dict describing the encoded output
   """
 
-  def __init__(self, n=DEFAULT_N, w=DEFAULT_W, unionSparsity=20.0):
+  def __init__(self, n=DEFAULT_N, w=DEFAULT_W, unionSparsity=0.20):
     """The SDR dimensions are standard for Cortical.io fingerprints."""
     self.n = n
     self.w = w
@@ -175,19 +175,6 @@ class LanguageEncoder(object):
         len(numpy.union1d(bitmap1, bitmap2)))
 
     return distances
-
-
-  def sparseUnion(self, counts):
-    """
-    Bits from the input patterns are unionized and then sparsified.
-
-    @param counts     (Counter)   A count of the ON bits for the union bitmap.
-
-    @return           (list)      A sparsified union bitmap.
-    """
-    max_sparsity = int((self.unionSparsity / 100) * self.n)
-    w = min(len(counts), max_sparsity)
-    return [c[0] for c in counts.most_common(w)]  # TODO: how does this break ties?
 
 
   @staticmethod

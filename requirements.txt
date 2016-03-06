@@ -1,4 +1,7 @@
 # Program requirements
+matplotlib
 pandas
 plotly
+simplejson
 nupic
+tabulate

@@ -1,6 +1,6 @@
 # ----------------------------------------------------------------------
 # Numenta Platform for Intelligent Computing (NuPIC)
-# Copyright (C) 2015, Numenta, Inc.  Unless you have purchased from
+# Copyright (C) 2016, Numenta, Inc.  Unless you have purchased from
 # Numenta, Inc. a separate commercial license for this software code, the
 # following terms and conditions apply:
 #
@@ -19,246 +19,121 @@
 # http://numenta.org/licenses/
 # ----------------------------------------------------------------------
 
-import cPickle as pkl
-import numpy
-import operator
-import os
-
 from htmresearch.frameworks.classification.classification_network import (
   configureNetwork)
 from htmresearch.encoders.cio_encoder import CioEncoder
-from htmresearch.frameworks.nlp.classification_model import ClassificationModel
-from htmresearch.support.network_text_data_generator import NetworkDataGenerator
-from nupic.data.file_record_stream import FileRecordStream
+from htmresearch.frameworks.nlp.classify_network_api import (
+  ClassificationNetworkAPI
+)
 
 
-
-class ClassificationModelHTM(ClassificationModel):
-  """
-  Class to run the survey response classification task with nupic network.
-  """
+class ClassificationModelHTM(ClassificationNetworkAPI):
+  """Classify text using generic network-API based models."""
 
   def __init__(self,
-               networkConfig,
-               inputFilePath,
                retinaScaling=1.0,
                retina="en_associative",
                apiKey=None,
-               verbosity=1,
-               numLabels=3,
-               modelDir="ClassificationModelHTM",
-               prepData=True,
-               stripCats=False):
+               maxSparsity=1.0,
+               **kwargs):
     """
-    @param networkConfig      (str)     Path to JSON of network configuration,
-                                        with region parameters.
-    @param inputFilePath      (str)     Path to data file.
     @param retinaScaling      (float)   Scales the dimensions of the SDRs.
     @param retina             (str)     Name of Cio retina.
     @param apiKey             (str)     Key for Cio API.
-    @param prepData           (bool)    Prepare the input data into network API
-                                        format.
-    @param stripCats          (bool)    Remove the categories and replace them
-                                        with the sequence_Id.
+    @param maxSparsity        (float)   The maximum sparsity of the CIO bitmap.
+
     See ClassificationModel for remaining parameters.
     """
+    super(ClassificationModelHTM, self).__init__(**kwargs)
 
-    super(ClassificationModelHTM, self).__init__(
-      verbosity=verbosity, numLabels=numLabels, modelDir=modelDir)
-
-    self.networkConfig = networkConfig
     self.retinaScaling = retinaScaling
     self.retina = retina
     self.apiKey = apiKey
-
-    if prepData:
-      self.networkDataPath, self.networkDataGen = self.prepData(
-        inputFilePath, stripCats=stripCats)
-    else:
-      self.networkDataPath = inputFilePath
-      self.networkDataGen = None
-
+    self.maxSparsity = maxSparsity
     self.network = self.initModel()
-    self.learningRegions = self._getLearningRegions()
-
-    # Always a sensor and classifier region.
-    self.sensorRegion = self.network.regions[
-      self.networkConfig["sensorRegionConfig"].get("regionName")]
-    self.classifierRegion = self.network.regions[
-      self.networkConfig["classifierRegionConfig"].get("regionName")]
-
-
-  def prepData(self, dataPath, ordered=False, stripCats=False, **kwargs):
-    """
-    Generate the data in network API format.
-
-    @param dataPath          (str)  Path to input data file; format as expected
-                                    by NetworkDataGenerator.
-    @param ordered           (bool) Keep order of data, or randomize.
-    @param stripCats         (bool) Remove the categories and replace them with
-                                    the sequence_Id.
-    @return networkDataPath  (str)  Path to data formtted for network API.
-    @return ndg              (NetworkDataGenerator)
-    """
-    ndg = NetworkDataGenerator()
-    networkDataPath = ndg.setupData(
-      dataPath, self.numLabels, ordered, stripCats, **kwargs)
-
-    return networkDataPath, ndg
+    self._initializeRegionHelpers()
 
 
   def initModel(self):
     """
     Initialize the network; self.networdDataPath must already be set.
     """
-    recordStream = FileRecordStream(streamID=self.networkDataPath)
-    root = os.path.dirname(os.path.realpath(__file__))
     encoder = CioEncoder(retinaScaling=self.retinaScaling,
-                         cacheDir=os.path.join(root, "CioCache"),
                          retina=self.retina,
-                         apiKey=self.apiKey)
+                         apiKey=self.apiKey,
+                         maxSparsity=self.maxSparsity,
+                         verbosity=self.verbosity-1)
 
     # This encoder specifies the LanguageSensor output width.
-    return configureNetwork(recordStream, self.networkConfig, encoder)
+    return configureNetwork(None, self.networkConfig, encoder)
 
 
-  def _getLearningRegions(self):
-    """Return tuple of the network's region objects that learn."""
-    learningRegions = []
-    for region in self.network.regions.values():
-      try:
-        _ = region.getParameter("learningMode")
-        learningRegions.append(region)
-      except:
-        continue
-
-    return learningRegions
-
-
-  # TODO: is this still needed?
-  def encodeSample(self, sample):
+  def trainToken(self, token, labels, tokenId, reset=0):
     """
-    Put each token in its own dictionary with its bitmap
-    @param sample     (list)            Tokenized sample, where each item is a
-                                        string token.
-    @return           (list)            The sample text, sparsity, and bitmap
-                                        for each token. Since the network will
-                                        do the actual encoding, the bitmap and
-                                        sparsity will be None
-    Example return list:
-      [{
-        "text": "Example text",
-        "sparsity": 0.0,
-        "bitmap": None
-      }]
-    """
-    return [{"text": t,
-             "sparsity": None,
-             "bitmap": None} for t in sample]
+    Train the model with the given text token, associated labels, and ID
+    associated with this token.
 
-
-  def resetModel(self):
-    """
-    Reset the model by creating a new network since the network API does not
-    support resets.
-    """
-    # TODO: test this works as expected
-    self.network = self.initModel()
-
-
-  def saveModel(self):
-    # TODO: test this works
-    try:
-      if not os.path.exists(self.modelDir):
-        os.makedirs(self.modelDir)
-      networkPath = os.path.join(self.modelDir, "network.nta")
-      self.network.save(networkPath)
-      # with open(networkPath, "wb") as f:
-      #   pkl.dump(self, f)
-      if self.verbosity > 0:
-        print "Model saved to \'{}\'.".format(networkPath)
-    except IOError as e:
-      print "Could not save model to \'{}\'.".format(networkPath)
-      raise e
-
-
-  def trainModel(self, iterations=1):
-    """
-    Run the network with all regions learning.
-    Note self.sampleReference doesn't get populated b/c in a network model
-    there's a 1-to-1 mapping of training samples.
+    See base class for description of parameters.
     """
     for region in self.learningRegions:
-      # if region.name == 'UP': continue
       region.setParameter("learningMode", True)
-
-    self.network.run(iterations)
-
-
-  def testModel(self, seed=42):
-    """
-    Test the classifier region on the input sample. Call this method for each
-    word of a sequence. The random seed is used in getWinningLabels().
-
-    @return           (numpy array)   numLabels most-frequent classifications
-                                      for the data samples; int or empty.
-    """
-    for region in self.learningRegions:
-      region.setParameter("learningMode", False)
-    self.classifierRegion.setParameter("inferenceMode", True)
-
+    sensor = self.sensorRegion.getSelf()
+    sensor.addDataToQueue(token,
+                          categoryList=labels,
+                          sequenceId=tokenId,
+                          reset=0)
     self.network.run(1)
 
-    return self._getClassifierInference(seed)
+    # Print the outputs of each region
+    if self.verbosity >= 2:
+      self.printRegionOutputs()
+
+    if reset == 1:
+      self.reset()
 
 
-  def _getClassifierInference(self, seed):
-    """Return output categories from the classifier region."""
-    relevantCats = self.classifierRegion.getParameter("categoryCount")
-
-    if self.classifierRegion.type == "py.KNNClassifierRegion":
-      # max number of inferences = k
-      inferenceValues = self.classifierRegion.getOutputData(
-        "categoriesOut")[:relevantCats]
-      return self.getWinningLabels(inferenceValues, seed)
-
-
-    elif self.classifierRegion.type == "py.CLAClassifierRegion":
-      # TODO: test this
-      return self.classifierRegion.getOutputData("categoriesOut")[:relevantCats]
-
-
-  def queryModel(self, query, preprocess=False):
+  def inferToken(self, token, reset=0, returnDetailedResults=False,
+                 sortResults=True):
     """
-    Run the query through the network, getting the classifer region's inferences
-    for all words of the query sequence.
-    @return       (list)          Two-tuples of sequence ID and distance, sorted
-                                  closest to farthest from the query.
+    Classify the token (i.e. run inference on the model with this document) and
+    return classification results and a list of sampleIds and distances.
+    Repeated sampleIds are NOT removed from the results.
+
+    See base class for description of parameters.
     """
     for region in self.learningRegions:
       region.setParameter("learningMode", False)
-    self.classifierRegion.setParameter("inferenceMode", True)
-
-    # Put query text in LanguageSensor data format.
-    queryDicts = self.networkDataGen.generateSequence(query, preprocess)
-
-    sampleDistances = None
     sensor = self.sensorRegion.getSelf()
-    for qD in queryDicts:
-      # Sum together the inferred distances for each word of the query sequence.
-      sensor.queue.appendleft(qD)
-      self.network.run(1)
-      inferenceValues = self.classifierRegion.getOutputData("categoriesOut")
-      if sampleDistances is None:
-        sampleDistances = inferenceValues
-      else:
-        sampleDistances += inferenceValues
+    sensor.addDataToQueue(token,
+                          categoryList=[None],
+                          sequenceId=-1, reset=0)
+    self.network.run(1)
 
-    catCount = self.classifierRegion.getParameter("categoryCount")
-    # The use of numpy.lexsort() here is to first sort by labelFreq, then sort
-    # by random values; this breaks ties in a random manner.
-    randomValues = numpy.random.random(catCount)
-    sortedSamples = numpy.lexsort((randomValues, sampleDistances[:catCount]))
-    qTuple = [(a, b) for a, b in zip(sortedSamples, sampleDistances[:catCount])]
+    dist = self.classifierRegion.getSelf().getLatestDistances()
 
-    return sorted(qTuple, key=operator.itemgetter(1))
+    categoryLikelihoods = self.classifierRegion.getOutputData(
+        "categoriesOut")[0:self.numLabels]
+
+    # Print the outputs of each region
+    if self.verbosity >= 2:
+      self.printRegionOutputs()
+
+    if reset == 1:
+      self.reset()
+
+    # If detailed results are not requested just return the category votes
+    if not returnDetailedResults:
+      return categoryLikelihoods, None, None
+
+    # Unsorted detailed results are easy
+    classifier = self.getClassifier()
+    partitionIdList = classifier.getPartitionIdPerPattern()
+    if not sortResults:
+      return categoryLikelihoods, partitionIdList, dist
+
+    # Sort results if requested
+    sortedIndices = dist.argsort()
+    sortedDistances = dist[sortedIndices]
+    sortedSampleIdList = [partitionIdList[i] for i in sortedIndices]
+
+    return categoryLikelihoods, sortedSampleIdList, sortedDistances

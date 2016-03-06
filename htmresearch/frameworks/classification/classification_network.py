@@ -21,24 +21,24 @@
 # ----------------------------------------------------------------------
 """
 The methods here are a factory to create a classification network
-of any of sensor, SP, TM, UP, and classifier regions.
+of any of sensor, SP, TM, TP, and classifier regions.
 """
-
-try:
-  import simplejson as json
-except ImportError:
-  import json
+import copy
+import simplejson as json
 import logging
 import numpy
+import sys
 
 from nupic.encoders import MultiEncoder
 from nupic.engine import Network
 from nupic.engine import pyRegions
 
+from htmresearch.support.register_regions import registerResearchRegion
 
 _PY_REGIONS = [r[1] for r in pyRegions]
 _LOGGER = logging.getLogger(__name__)
-# logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(format='[%(levelname)s] %(message)s', level=logging.INFO,
+                    stream=sys.stdout)
 TEST_PARTITION_NAME = "test"
 
 
@@ -140,36 +140,14 @@ def _addRegisteredRegion(network, regionConfig, moduleName=None):
 
   regionTypeName = regionType.split(".")[1]
   if regionTypeName not in _PY_REGIONS:
-    _registerRegion(regionTypeName, moduleName)
+    registerResearchRegion(regionTypeName, moduleName)
 
   return network.addRegion(regionName, regionType, json.dumps(regionParams))
 
 
-
-def _registerRegion(regionTypeName, moduleName=None):
-  """
-  A region may be non-standard, so add custom region class to the network.
-
-  @param regionTypeName: (str) type name of the region. E.g SensorRegion.
-  @param moduleName: (str) location of the region class, only needed if
-    registering a region that is outside the expected "regions/" dir.
-  """
-  if moduleName is None:
-    # the region is located in the regions/ directory
-    moduleName = "htmresearch.regions." + regionTypeName
-  if regionTypeName not in _PY_REGIONS:
-    # Add new region class to the network.
-    module = __import__(moduleName, {}, {}, regionTypeName)
-    unregisteredClass = getattr(module, regionTypeName)
-    Network.registerRegion(unregisteredClass)
-    # Add region to list of registered PyRegions
-    _PY_REGIONS.append(regionTypeName)
-
-
-
 def _createRegion(network, regionConfig, moduleName=None):
   """
-  Create the SP, TM, UP, or classifier region.
+  Create the SP, TM, TP, or classifier region.
 
   @param network: (Network) The region will be a node in this network.
   @param regionConfig: (dict) The region configuration
@@ -204,7 +182,8 @@ def _linkRegions(network,
   network.link(previousRegionName, currentRegionName, "UniformLink", "")
   network.link(sensorRegionName, currentRegionName, "UniformLink", "",
                srcOutput="resetOut", destInput="resetIn")
-
+  network.link(sensorRegionName, currentRegionName, "UniformLink", "",
+               srcOutput="sequenceIdOut", destInput="sequenceIdIn")
 
 
 def _validateRegionWidths(previousRegionWidth, currentRegionWidth):
@@ -273,7 +252,8 @@ def createNetwork(dataSource, networkConfig, encoder=None):
   previousRegion = sensorRegionName
   previousRegionWidth = sensorRegion.encoder.getWidth()
 
-  networkRegions = [r for r in networkConfig.keys() if networkConfig[r]["regionEnabled"]]
+  networkRegions = [r for r in networkConfig.keys() 
+                    if networkConfig[r]["regionEnabled"]]
 
   if "spRegionConfig" in networkRegions:
     # create SP region, if enabled
@@ -307,7 +287,7 @@ def createNetwork(dataSource, networkConfig, encoder=None):
                            tmRegion.getSelf().cellsPerColumn)
 
   if "tpRegionConfig" in networkRegions:
-    # create UP region, if enabled
+    # create TP region, if enabled
     regionConfig = networkConfig["tpRegionConfig"]
     regionName = regionConfig["regionName"]
     regionParams = regionConfig["regionParams"]
@@ -336,6 +316,13 @@ def createNetwork(dataSource, networkConfig, encoder=None):
                srcOutput="categoryOut",
                destInput="categoryIn")
 
+  # Link in sequenceId/partitionId if the appropriate input exists
+  classifierSpec = network.regions[regionName].getSpec()
+  if classifierSpec.inputs.contains('partitionIn'):
+    network.link(sensorRegionName, regionName, "UniformLink", "",
+                 srcOutput="sequenceIdOut", destInput="partitionIn")
+  
+
   return network
 
 
@@ -359,7 +346,7 @@ def _enableRegionLearning(network,
                "but OFF for the remaining regions." % (regionName,
                                                        recordNumber,
                                                        trainedRegionNames))
-  print phaseInfo
+  _LOGGER.info(phaseInfo)
 
 
 
@@ -380,20 +367,23 @@ def _stopLearning(network, trainedRegionNames, recordNumber):
   phaseInfo = ("-> Test phase. RecordNumber=%s. "
                "Learning is OFF for all regions: %s" % (recordNumber,
                                                         trainedRegionNames))
-  print phaseInfo
+  _LOGGER.info(phaseInfo)
 
 
 
-def runNetwork(network, networkConfig, partitions, numRecords):
+def trainNetwork(network, networkConfig, networkPartitions, numRecords):
   """
-  Run the network and write classification results output.
+  Train the network.
 
   @param network: (Network) a Network instance to run.
   @param networkConfig: (dict) params for network regions.
-  @param partitions: (list of tuples) Region names and index at which the
-    region is to begin learning, including a test partition (the last entry).
+  @param networkPartitions: (list of tuples) Region names and index at which the
+   region is to begin learning, including a test partition (the last entry).
   @param numRecords: (int) Number of records of the input dataset.
   """
+  
+  partitions = copy.deepcopy(networkPartitions) # preserve original partitions
+  
   sensorRegion = network.regions[
     networkConfig["sensorRegionConfig"].get("regionName")]
   classifierRegion = network.regions[
@@ -435,15 +425,15 @@ def runNetwork(network, networkConfig, partitions, numRecords):
                % (recordNumber, actualValue, inferredValue))
       numTestRecords += 1
 
-  predictionAccuracy = round(100.0 * numCorrect / numTestRecords, 2)
+  classificationAccuracy = round(100.0 * numCorrect / numTestRecords, 2)
 
-  results = ("RESULTS: accuracy=%s | %s correctly predicted records out of %s "
-             "test records \n" % (predictionAccuracy,
+  results = ("RESULTS: accuracy=%s | %s correctly classified records out of %s "
+             "test records \n" % (classificationAccuracy,
                                   numCorrect,
                                   numTestRecords))
-  print results
+  _LOGGER.info(results)
 
-  return numCorrect, numTestRecords, predictionAccuracy
+  return classificationAccuracy
 
 
 

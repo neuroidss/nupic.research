@@ -22,16 +22,13 @@
 import shutil
 import unittest
 
-try:
-  import simplejson as json
-except ImportError:
-  import json
+import simplejson as json
 
 from nupic.data.file_record_stream import FileRecordStream
 
 from htmresearch.frameworks.classification.classification_network import (
   configureNetwork,
-  runNetwork)
+  trainNetwork)
 from htmresearch.frameworks.classification.utils.sensor_data import (
   generateSensorData)
 from htmresearch.frameworks.classification.utils.network_config import (
@@ -56,6 +53,8 @@ DATA_DIR = "data"
 # Classifier types
 CLA_CLASSIFIER_TYPE = "py.CLAClassifierRegion"
 KNN_CLASSIFIER_TYPE = "py.KNNClassifierRegion"
+
+
 
 class TestSensorDataClassification(unittest.TestCase):
   """Test classification results for sensor data."""
@@ -97,7 +96,7 @@ class TestSensorDataClassification(unittest.TestCase):
                            " * sensorType=%s\n"
                            " * spEnabled=%s\n"
                            " * tmEnabled=%s\n"
-                           " * upEnabled=%s\n"
+                           " * tpEnabled=%s\n"
                            " * classifierType=%s\n"
                            ) % (NUM_RECORDS,
                                 signalAmplitude,
@@ -127,10 +126,8 @@ class TestSensorDataClassification(unittest.TestCase):
               partitions = generateNetworkPartitions(networkConfig,
                                                      NUM_RECORDS)
 
-              (numCorrect,
-               numTestRecords,
-               predictionAccuracy) = runNetwork(network, networkConfig,
-                                                partitions, NUM_RECORDS)
+              classificationAccuracy = trainNetwork(network, networkConfig,
+                                                  partitions, NUM_RECORDS)
 
               if (noiseAmplitude == 0
                   and signalMean == 1.0
@@ -140,7 +137,7 @@ class TestSensorDataClassification(unittest.TestCase):
                   and spEnabled
                   and tmEnabled
                   and not upEnabled):
-                self.assertEqual(predictionAccuracy, 100.00)
+                self.assertEqual(classificationAccuracy, 100.00)
               elif (noiseAmplitude == 0
                     and signalMean == 1.0
                     and signalAmplitude == 1.0
@@ -149,7 +146,7 @@ class TestSensorDataClassification(unittest.TestCase):
                     and spEnabled
                     and tmEnabled
                     and not upEnabled):
-                self.assertEqual(predictionAccuracy, 100.00)
+                self.assertEqual(classificationAccuracy, 100.00)
               elif (noiseAmplitude == 0
                     and signalMean == 1.0
                     and signalAmplitude == 1.0
@@ -158,7 +155,7 @@ class TestSensorDataClassification(unittest.TestCase):
                     and spEnabled
                     and not tmEnabled
                     and not upEnabled):
-                self.assertEqual(predictionAccuracy, 100.00)
+                self.assertEqual(classificationAccuracy, 100.00)
               elif (noiseAmplitude == 1.0
                     and signalMean == 1.0
                     and signalAmplitude == 1.0
@@ -168,7 +165,7 @@ class TestSensorDataClassification(unittest.TestCase):
                     and tmEnabled
                     and not upEnabled):
                 # using AlmostEqual until the random bug issue is fixed
-                self.assertAlmostEqual(predictionAccuracy, 80, delta=1)
+                self.assertAlmostEqual(classificationAccuracy, 80, delta=5)
               elif (noiseAmplitude == 1.0
                     and signalMean == 1.0
                     and signalAmplitude == 1.0
@@ -178,7 +175,7 @@ class TestSensorDataClassification(unittest.TestCase):
                     and not tmEnabled
                     and not upEnabled):
                 # using AlmostEqual until the random bug issue is fixed
-                self.assertAlmostEqual(predictionAccuracy, 81, delta=1)
+                self.assertAlmostEqual(classificationAccuracy, 81, delta=5)
 
 
   def tearDown(self):
