@@ -25,13 +25,12 @@ import time
 import numpy
 
 from nupic.algorithms.KNNClassifier import KNNClassifier
+from htmresearch_core.experimental import ExtendedTemporalMemory
 from nupic.bindings.math import GetNTAReal
-from nupic.research.monitor_mixin.monitor_mixin_base import MonitorMixinBase
-from nupic.research.monitor_mixin.temporal_memory_monitor_mixin import (
-    TemporalMemoryMonitorMixin)
+from nupic.algorithms.monitor_mixin.monitor_mixin_base import MonitorMixinBase
 
-from htmresearch.algorithms.general_temporal_memory import (
-     GeneralTemporalMemory)
+from htmresearch.support.etm_monitor_mixin import (
+     ExtendedTemporalMemoryMonitorMixin)
 from htmresearch.support.union_temporal_pooler_monitor_mixin import (
      UnionTemporalPoolerMonitorMixin)
 
@@ -39,8 +38,8 @@ from htmresearch.support.union_temporal_pooler_monitor_mixin import (
 # uncomment to use early version of union pooler
 from htmresearch.algorithms.union_temporal_pooler import UnionTemporalPooler
 
-class MonitoredFastGeneralTemporalMemory(TemporalMemoryMonitorMixin,
-                                         GeneralTemporalMemory):
+class MonitoredFastExtendedTemporalMemory(ExtendedTemporalMemoryMonitorMixin,
+                                          ExtendedTemporalMemory):
   pass
 
 
@@ -60,13 +59,13 @@ class UnionTemporalPoolerExperiment(object):
   """
 
 
-  DEFAULT_TEMPORAL_MEMORY_PARAMS = {"columnDimensions": (1024,),
+  DEFAULT_TEMPORAL_MEMORY_PARAMS = {"columnCount": 1024,
                                     "cellsPerColumn": 8,
                                     "activationThreshold": 20,
                                     "initialPermanence": 0.5,
                                     "connectedPermanence": 0.6,
                                     "minThreshold": 20,
-                                    "maxNewSynapseCount": 30,
+                                    "sampleSize": 30,
                                     "permanenceIncrement": 0.10,
                                     "permanenceDecrement": 0.02,
                                     "seed": 42,
@@ -86,9 +85,8 @@ class UnionTemporalPoolerExperiment(object):
                                  "globalInhibition": True,
                                  "localAreaDensity": -1,
                                  "minPctOverlapDutyCycle": 0.001,
-                                 "minPctActiveDutyCycle": 0.001,
                                  "dutyCyclePeriod": 1000,
-                                 "maxBoost": 10.0,
+                                 "boostStrength": 10.0,
                                  "seed": 42,
                                  "spVerbosity": 0,
                                  "wrapAround": True,
@@ -112,7 +110,9 @@ class UnionTemporalPoolerExperiment(object):
     params = dict(self.DEFAULT_TEMPORAL_MEMORY_PARAMS)
     params.update(tmOverrides or {})
     params["seed"] = seed
-    self.tm = MonitoredFastGeneralTemporalMemory(mmName="TM", **params)
+    print "params: "
+    print params
+    self.tm = MonitoredFastExtendedTemporalMemory(mmName="TM", **params)
 
     print "Initializing Union Temporal Pooler..."
     start = time.time()
@@ -199,7 +199,6 @@ class UnionTemporalPoolerExperiment(object):
       self.up.reset()
     else:
       self.tm.compute(sensorPattern,
-                      formInternalConnections=True,
                       learn=tmLearn,
                       sequenceLabel=sequenceLabel)
 

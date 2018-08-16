@@ -23,15 +23,17 @@
 import random
 import numbers
 import numpy
+
 from scipy import reshape, dot, outer
-from expsuite import PyExperimentSuite
-from pybrain.datasets import SequentialDataSet
-from pybrain.tools.shortcuts import buildNetwork
-from pybrain.structure.modules import LSTMLayer
-from pybrain.supervised import RPropMinusTrainer
+
+from htmresearch.support.expsuite import PyExperimentSuite
 from htmresearch.support.sequence_prediction_dataset import ReberDataset
 from htmresearch.support.sequence_prediction_dataset import SimpleDataset
 from htmresearch.support.sequence_prediction_dataset import HighOrderDataset
+from pybrain.datasets import SequentialDataSet
+from pybrain.tools.shortcuts import buildNetwork
+from pybrain.structure.modules import LSTMLayer
+from pybrain.supervised import RPropMinusTrainer, BackpropTrainer
 
 
 class Encoder(object):
@@ -43,7 +45,7 @@ class Encoder(object):
     pass
 
 
-  def random(self):
+  def randomSymbol(self):
     pass
 
 
@@ -59,14 +61,22 @@ class BasicEncoder(Encoder):
     return encoding
 
 
-  def randomSymbol(self):
+  def randomSymbol(self, seed):
+    random.seed(seed)
     return random.randrange(self.num)
 
 
-  def classify(self, encoding, num=1):
-    idx = numpy.argpartition(encoding, -num)[-num:]
-    return idx[numpy.argsort(encoding[idx])][::-1].tolist()
+  # def classify(self, encoding, num=1):
+  #   idx = numpy.argpartition(encoding, -num)[-num:]
+  #   return idx[numpy.argsort(encoding[idx])][::-1].tolist()
 
+  def classify(self, encoding, num=1):
+    """
+    Classify with basic one-hot local incoding
+    """
+    probDist = numpy.exp(encoding) / numpy.sum(numpy.exp(encoding))
+    sortIdx = numpy.argsort(probDist)
+    return sortIdx[-num:].tolist()
 
 
 class DistributedEncoder(Encoder):
@@ -108,8 +118,9 @@ class DistributedEncoder(Encoder):
     return encoding
 
 
-  def randomSymbol(self):
-    return random.randrange(self.num, self.num+5000)
+  def randomSymbol(self, seed):
+    random.seed(seed)
+    return random.randrange(self.num, self.num+50000)
 
 
   @staticmethod
@@ -128,6 +139,7 @@ class DistributedEncoder(Encoder):
 
     idx = self.closest(encoding, encodings.values(), num)
     return [encodings.keys()[i] for i in idx]
+
 
 
 
@@ -151,7 +163,8 @@ class Suite(PyExperimentSuite):
     elif params['dataset'] == 'reber':
       self.dataset = ReberDataset(maxLength=params['max_length'])
     elif params['dataset'] == 'high-order':
-      self.dataset = HighOrderDataset(numPredictions=params['num_predictions'])
+      self.dataset = HighOrderDataset(numPredictions=params['num_predictions'],
+                                      seed=params['seed'])
     else:
       raise Exception("Dataset not found")
 
@@ -165,7 +178,20 @@ class Suite(PyExperimentSuite):
     self.targetPrediction = []
     self.replenishSequence(params, iteration=0)
 
-    self.net = None
+    self.net = buildNetwork(params['encoding_num'], params['num_cells'],
+                            params['encoding_num'],
+                            hiddenclass=LSTMLayer,
+                            bias=True,
+                            outputbias=params['output_bias'],
+                            recurrent=True)
+
+    self.trainer = BackpropTrainer(self.net,
+                          dataset=SequentialDataSet(params['encoding_num'], params['encoding_num']),
+                          learningrate=0.01,
+                          momentum=0,
+                          verbose=params['verbosity'] > 0)
+
+
     self.sequenceCounter = 0
 
   def window(self, data, params):
@@ -180,20 +206,17 @@ class Suite(PyExperimentSuite):
     :param params:
     :return:
     """
-    n = params['encoding_num']
-    net = buildNetwork(n, params['num_cells'], n,
-                       hiddenclass=LSTMLayer,
-                       bias=True,
-                       outputbias=params['output_bias'],
-                       recurrent=True)
-    net.reset()
+    if params['reset_every_training']:
+      n = params['encoding_num']
+      self.net = buildNetwork(n, params['num_cells'], n,
+                               hiddenclass=LSTMLayer,
+                               bias=True,
+                               outputbias=params['output_bias'],
+                               recurrent=True)
+      self.net.reset()
 
     # prepare training dataset
-    ds = SequentialDataSet(n, n)
-    trainer = RPropMinusTrainer(net,
-                                dataset=ds,
-                                verbose=params['verbosity'] > 0)
-
+    ds = SequentialDataSet(params['encoding_num'], params['encoding_num'])
     history = self.window(self.history, params)
     resets = self.window(self.resets, params)
 
@@ -204,20 +227,37 @@ class Suite(PyExperimentSuite):
       if resets[i]:
         ds.newSequence()
 
-    if len(history) > 1:
-      trainer.trainEpochs(params['num_epochs'])
-      net.reset()
+    print "Train LSTM network on buffered dataset of length ", len(history)
+    if params['num_epochs'] > 1:
+      trainer = RPropMinusTrainer(self.net,
+                                  dataset=ds,
+                                  verbose=params['verbosity'] > 0)
 
-    # run network on buffered dataset after training to get the state right
-    for i in xrange(len(history) - 1):
-      symbol = history[i]
-      output = net.activate(self.encoder.encode(symbol))
-      predictions = self.encoder.classify(output, num=params['num_predictions'])
+      if len(history) > 1:
+        trainer.trainEpochs(params['num_epochs'])
 
-      if resets[i]:
-        net.reset()
+      # run network on buffered dataset after training to get the state right
+      self.net.reset()
+      for i in xrange(len(history) - 1):
+        symbol = history[i]
+        output = self.net.activate(self.encoder.encode(symbol))
+        self.encoder.classify(output, num=params['num_predictions'])
 
-    return net
+        if resets[i]:
+          self.net.reset()
+    else:
+      self.trainer.setData(ds)
+      self.trainer.train()
+
+      # run network on buffered dataset after training to get the state right
+      self.net.reset()
+      for i in xrange(len(history) - 1):
+        symbol = history[i]
+        output = self.net.activate(self.encoder.encode(symbol))
+        self.encoder.classify(output, num=params['num_predictions'])
+
+        if resets[i]:
+          self.net.reset()
 
 
   def killCells(self, killCellPercent):
@@ -282,9 +322,10 @@ class Suite(PyExperimentSuite):
 
   def replenishSequence(self, params, iteration):
     if iteration > params['perturb_after']:
-      sequence, target = self.dataset.generateSequence(iteration, perturbed=True)
+      sequence, target = self.dataset.generateSequence(params['seed']+iteration,
+                                                       perturbed=True)
     else:
-      sequence, target = self.dataset.generateSequence(iteration)
+      sequence, target = self.dataset.generateSequence(params['seed']+iteration)
 
     if (iteration > params['inject_noise_after'] and
             iteration < params['stop_inject_noise_after']):
@@ -292,7 +333,7 @@ class Suite(PyExperimentSuite):
       sequence[injectNoiseAt] = self.encoder.randomSymbol()
 
     if params['separate_sequences_with'] == 'random':
-      sequence.append(self.encoder.randomSymbol())
+      sequence.append(self.encoder.randomSymbol(seed=params['seed']+iteration))
       target.append(None)
 
     if params['verbosity'] > 0:
@@ -318,11 +359,11 @@ class Suite(PyExperimentSuite):
 
 
   def iterate(self, params, repetition, iteration):
-    element = self.currentSequence.pop(0)
+    currentElement = self.currentSequence.pop(0)
     target = self.targetPrediction.pop(0)
 
     # update buffered dataset
-    self.history.append(element)
+    self.history.append(currentElement)
 
     # whether there will be a reset signal after the current record
     resetFlag = (len(self.currentSequence) == 0 and
@@ -346,7 +387,7 @@ class Suite(PyExperimentSuite):
       self.killCells(params['kill_cell_percent'])
 
     # reset compute counter
-    if iteration % params['compute_every'] == 0:
+    if iteration > 0 and iteration % params['compute_every'] == 0:
       self.computeCounter = params['compute_for']
 
     if self.computeCounter == 0 or iteration < params['compute_after']:
@@ -364,12 +405,15 @@ class Suite(PyExperimentSuite):
         if params['verbosity'] > 0:
           print "Training LSTM at iteration {}".format(iteration)
 
-        self.net = self.train(params)
+        self.train(params)
 
       # run LSTM on the latest data record
 
-      output = self.net.activate(self.encoder.encode(element))
-      predictions = self.encoder.classify(output, num=params['num_predictions'])
+      output = self.net.activate(self.encoder.encode(currentElement))
+      if params['encoding'] == 'distributed':
+        predictions = self.encoder.classify(output, num=params['num_predictions'])
+      elif params['encoding'] == 'basic':
+        predictions = self.encoder.classify(output, num=params['num_predictions'])
 
       correct = self.check_prediction(predictions, target)
 
@@ -379,14 +423,15 @@ class Suite(PyExperimentSuite):
                "predictions: {2} \t"
                "truth: {3} \t"
                "correct: {4} \t").format(
-          iteration, element, predictions, target, correct)
+          iteration, currentElement, predictions, target, correct)
 
       if self.resets[-1]:
         if params['verbosity'] > 0:
           print "Reset LSTM at iteration {}".format(iteration)
         self.net.reset()
 
-      return {"current": element,
+      return {"iteration": iteration,
+              "current": currentElement,
               "reset": self.resets[-1],
               "random": self.randoms[-1],
               "train": train,

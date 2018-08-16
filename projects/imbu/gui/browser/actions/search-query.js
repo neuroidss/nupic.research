@@ -23,15 +23,16 @@ import request from 'superagent';
 const API_HOST = '/fluent';
 
 export default (context, payload) => {
-  let model, query;
-  if (payload) {
-    query = payload.query;
-    model = payload.model;
-  }
+  let {dataset, model, query} = payload;
   return new Promise((resolve, reject) => {
     if (model) {
+      context.dispatch('SEARCH_QUERY_MODEL', {model, query});
+
       // Request results for given model
       let url = `${API_HOST}/${model}`
+      if (dataset) {
+        url += `/${dataset}`;
+      }
       request
         .post(url)
         .send(query)
@@ -39,7 +40,9 @@ export default (context, payload) => {
         .set('Access-Control-Allow-Origin', '*')
         .end((error, results) => {
           if (error) {
-            reject(error);
+            context.dispatch('SEARCH_RECEIVED_DATA_ERROR', {
+              query, model, error: error.message
+            });
           } else {
             context.dispatch('SEARCH_RECEIVED_DATA', {
               query, model, results: results.body
@@ -50,7 +53,7 @@ export default (context, payload) => {
       );
     } else {
       // No model given, just update the query
-      context.dispatch('SEARCH_RECEIVED_DATA', {query});
+      context.dispatch('SEARCH_QUERY_MODEL', {query});
       resolve();
     }
   });

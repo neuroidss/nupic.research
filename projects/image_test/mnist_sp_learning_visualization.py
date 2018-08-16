@@ -26,7 +26,7 @@ import numpy
 
 from nupic.bindings.math import GetNTAReal
 from nupic.engine import Network
-from nupic.research import fdrutilities
+from nupic.algorithms import fdrutilities
 
 from PIL import Image
 
@@ -64,7 +64,7 @@ DEFAULT_SP_PARAMS = {
   'numActiveColumnsPerInhArea': 1600,
   'globalInhibition': 1,
   'potentialPct': 0.4,
-  'maxBoost': 3.0
+  'boostStrength': 3.0
 }
 
 DEFAULT_CLASSIFIER_PARAMS = {

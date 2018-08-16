@@ -30,6 +30,11 @@ helpStr = """
   the content words in the other sentences. For the test we use each of the
   sentences as a search term. A perfect result ranks the four similar sentences
   closest to the search.
+
+  The "3B" version of the unit test uses a simpler search term comprising of
+  the category label itself. This version only compares the search terms against
+  the other documents. A perfect result ranks the four similar sentences
+  closest to the search.
 """
 
 import argparse
@@ -51,11 +56,19 @@ def runExperiment(args):
   """ Build a model and test it."""
   model, dataSet = setupExperiment(args)
 
-  allRanks, avgRanks, avgStats = testModel(model,
-                    dataSet,
-                    categorySize=CATEGORY_SIZE,
-                    verbosity=args.verbosity)
-  printRankResults("JUnit3", avgRanks, avgStats)
+  if args.testB:
+    allRanks, avgRanks, avgStats = testModel(model,
+                                           [d for d in dataSet if d[2]%100==0],
+                                           categorySize=CATEGORY_SIZE,
+                                           verbosity=args.verbosity)
+    printRankResults("JUnit3B", avgRanks, avgStats)
+
+  else:
+    allRanks, avgRanks, avgStats = testModel(model,
+                                           dataSet,
+                                           categorySize=CATEGORY_SIZE,
+                                           verbosity=args.verbosity)
+    printRankResults("JUnit3", avgRanks, avgStats)
 
   return allRanks, avgRanks, avgStats
 
@@ -92,7 +105,9 @@ def run(args):
     ranks.update({name:r})
     stats.update({name:s})
 
-  plotResults(allRanks, ranks, maxRank=NUMBER_OF_DOCS, testName="JUnit Test 3")
+  if args.plot:
+    plotResults(allRanks, ranks, maxRank=NUMBER_OF_DOCS,
+                testName="JUnit Test 3")
 
 
 
@@ -115,7 +130,7 @@ if __name__ == "__main__":
                       default="junit3_checkpoints",
                       help="Model(s) will be saved in this directory.")
   parser.add_argument("--retina",
-                      default="en_associative_64_univ",
+                      default="en_synonymous",
                       type=str,
                       help="Name of Cortical.io retina.")
   parser.add_argument("--apiKey",
@@ -128,9 +143,21 @@ if __name__ == "__main__":
                       type=int,
                       help="verbosity 0 will print out experiment steps, "
                            "verbosity 1 will include train and test data.")
+  parser.add_argument("--plot",
+                      action="store_true",
+                      default=False,
+                      help="If true will generate plotly Plots.")
+  parser.add_argument("--testB",
+                      action="store_true",
+                      default=False,
+                      help="If true will run unit test 3B.")
   args = parser.parse_args()
 
   # Default dataset for this unit test
-  args.dataPath = "data/junit/unit_test_3.csv"
+  if args.testB:
+    args.dataPath = "data/junit/unit_test_3b.csv"
+  else:
+    args.dataPath = "data/junit/unit_test_3.csv"
+
 
   run(args)

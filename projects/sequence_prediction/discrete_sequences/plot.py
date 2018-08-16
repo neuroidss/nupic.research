@@ -26,12 +26,13 @@ import json
 from matplotlib import pyplot
 import numpy
 
-from expsuite import PyExperimentSuite
+from htmresearch.support.expsuite import PyExperimentSuite
 
 
 def readExperiment(experiment):
   with open(experiment, "r") as file:
     predictions = []
+    predictionsSDR = []
     truths = []
     iterations = []
     resets = []
@@ -39,14 +40,23 @@ def readExperiment(experiment):
     trains = []
     killCell = []
     sequenceCounter = []
+    counter = 0
     for line in file.readlines():
       dataRec = json.loads(line)
-      iterations.append(dataRec['iteration'])
+      if 'iteration' in dataRec.keys():
+        iterations.append(dataRec['iteration'])
+      else:
+        iterations.append(counter)
 
       if 'predictions' in dataRec.keys():
         predictions.append(dataRec['predictions'])
       else:
         predictions.append(None)
+
+      if 'predictionsSDR' in dataRec.keys():
+        predictionsSDR.append(dataRec['predictionsSDR'])
+      else:
+        predictionsSDR.append(None)
 
       if 'truth' in dataRec.keys():
         truths.append(dataRec['truth'])
@@ -77,8 +87,9 @@ def readExperiment(experiment):
         sequenceCounter.append(dataRec['sequenceCounter'])
       else:
         sequenceCounter.append(None)
-
+      counter += 1
   return {'predictions': predictions,
+          'predictionsSDR': predictionsSDR,
           'truths': truths,
           'iterations': iterations,
           'resets': resets,
@@ -106,7 +117,7 @@ def plotMovingAverage(data, window, label=None):
 
 
 
-def plotAccuracy(results, train, window=100, type="sequences", label=None, hideTraining=True, lineSize=None):
+def plotAccuracy(results, train=None, window=100, type="sequences", label=None, hideTraining=True, lineSize=None):
   pyplot.title("High-order prediction")
   pyplot.xlabel("# of sequences seen")
   pyplot.ylabel("High-order prediction accuracy over last {0} tested {1}".format(window, type))

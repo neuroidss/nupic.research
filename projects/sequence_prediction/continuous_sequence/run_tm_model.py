@@ -29,30 +29,25 @@ from matplotlib import rcParams
 rcParams.update({'figure.autolayout': True})
 
 from nupic.frameworks.opf.metrics import MetricSpec
-from nupic.frameworks.opf.modelfactory import ModelFactory
-from nupic.frameworks.opf.predictionmetricsmanager import MetricsManager
+from nupic.frameworks.opf.model_factory import ModelFactory
+
+from nupic.frameworks.opf.prediction_metrics_manager import MetricsManager
 from nupic.frameworks.opf import metrics
-from htmresearch.frameworks.opf.clamodel_custom import CLAModel_custom
+# from htmresearch.frameworks.opf.clamodel_custom import CLAModel_custom
 import nupic_output
 
 
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from errorMetrics import *
+import yaml
+
+from htmresearch.support.sequence_learning_utils import *
 from matplotlib import rcParams
 rcParams.update({'figure.autolayout': True})
-
+rcParams['pdf.fonttype'] = 42
 
 plt.ion()
-DESCRIPTION = (
-  "Starts a NuPIC model from the model params returned by the swarm\n"
-  "and pushes each line of input from the gym into the model. Results\n"
-  "are written to an output file (default) or plotted dynamically if\n"
-  "the --plot option is specified.\n"
-  "NOTE: You must run ./swarm.py before this, because model parameters\n"
-  "are required to run NuPIC.\n"
-)
 
 
 DATA_DIR = "./data"
@@ -80,15 +75,13 @@ def createModel(modelParams):
 
 
 def getModelParamsFromName(dataSet):
-  importName = "model_params.%s_model_params" % (
-    dataSet.replace(" ", "_").replace("-", "_")
-  )
-  print "Importing model params from %s" % importName
-  try:
-    importedModelParams = importlib.import_module(importName).MODEL_PARAMS
-  except ImportError:
-    raise Exception("No model params exist for '%s'. Run swarm first!"
-                    % dataSet)
+  if (dataSet == "nyc_taxi" or
+          dataSet == "nyc_taxi_perturb" or
+          dataSet == "nyc_taxi_perturb_baseline"):
+    importedModelParams = yaml.safe_load(open('model_params/nyc_taxi_model_params.yaml'))
+  else:
+    raise Exception("No model params exist for {}".format(dataSet))
+
   return importedModelParams
 
 
@@ -115,6 +108,13 @@ def _getArgs():
                     default=5,
                     type=int)
 
+  parser.add_option("-c",
+                    "--classifier",
+                    type=str,
+                    default='SDRClassifierRegion',
+                    dest="classifier",
+                    help="Classifier Type: SDRClassifierRegion or CLAClassifierRegion")
+
   (options, remainder) = parser.parse_args()
   print options
 
@@ -136,16 +136,16 @@ def printTPRegionParams(tpregion):
   """
   tm = tpregion.getSelf()._tfdr
   print "------------PY  TemporalMemory Parameters ------------------"
-  print "numberOfCols             =", tm.columnDimensions
-  print "cellsPerColumn           =", tm.cellsPerColumn
-  print "minThreshold             =", tm.minThreshold
-  print "activationThreshold      =", tm.activationThreshold
-  print "newSynapseCount          =", tm.maxNewSynapseCount
-  print "initialPerm              =", tm.initialPermanence
-  print "connectedPerm            =", tm.connectedPermanence
-  print "permanenceInc            =", tm.permanenceIncrement
-  print "permanenceDec            =", tm.permanenceDecrement
-  print "predictedSegmentDecrement=", tm.predictedSegmentDecrement
+  print "numberOfCols             =", tm.getColumnDimensions()
+  print "cellsPerColumn           =", tm.getCellsPerColumn()
+  print "minThreshold             =", tm.getMinThreshold()
+  print "activationThreshold      =", tm.getActivationThreshold()
+  print "newSynapseCount          =", tm.getMaxNewSynapseCount()
+  print "initialPerm              =", tm.getInitialPermanence()
+  print "connectedPerm            =", tm.getConnectedPermanence()
+  print "permanenceInc            =", tm.getPermanenceIncrement()
+  print "permanenceDec            =", tm.getPermanenceDecrement()
+  print "predictedSegmentDecrement=", tm.getPredictedSegmentDecrement()
   print
 
 
@@ -167,6 +167,8 @@ def runMultiplePass(df, model, nMultiplePass, nTrain):
 
   return model
 
+
+
 def runMultiplePassSPonly(df, model, nMultiplePass, nTrain):
   """
   run CLA model SP through data record 0:nTrain nMultiplePass passes
@@ -185,12 +187,24 @@ def runMultiplePassSPonly(df, model, nMultiplePass, nTrain):
   return model
 
 
-if __name__ == "__main__":
-  print DESCRIPTION
 
+def movingAverage(a, n):
+  movingAverage = []
+
+  for i in xrange(len(a)):
+    start = max(0, i - n)
+    values = a[start:i+1]
+    movingAverage.append(sum(values) / float(len(values)))
+
+  return movingAverage
+
+
+
+if __name__ == "__main__":
   (_options, _args) = _getArgs()
   dataSet = _options.dataSet
   plot = _options.plot
+  classifierType = _options.classifier
 
   if dataSet == "rec-center-hourly":
     DATE_FORMAT = "%m/%d/%y %H:%M" # '7/2/10 0:00'
@@ -201,16 +215,15 @@ if __name__ == "__main__":
   else:
     raise RuntimeError("un recognized dataset")
 
-  if dataSet == "nyc_taxi" or dataSet == "nyc_taxi_perturb" or dataSet =="nyc_taxi_perturb_baseline":
-    modelParams = getModelParamsFromName("nyc_taxi")
-  else:
-    modelParams = getModelParamsFromName(dataSet)
+  modelParams = getModelParamsFromName(dataSet)
+  
   modelParams['modelParams']['clParams']['steps'] = str(_options.stepsAhead)
+  modelParams['modelParams']['clParams']['regionName'] = classifierType
 
   print "Creating model from %s..." % dataSet
 
   # use customized CLA model
-  model = CLAModel_custom(**modelParams['modelParams'])
+  model = ModelFactory.create(modelParams)
   model.enableInference({"predictedField": predictedField})
   model.enableLearning()
   model._spLearningEnabled = True
@@ -253,7 +266,6 @@ if __name__ == "__main__":
   model = runMultiplePassSPonly(df, model, nMultiplePass, nTrain)
   model._spLearningEnabled = False
 
-
   maxBucket = classifier_encoder.n - classifier_encoder.w + 1
   likelihoodsVecAll = np.zeros((maxBucket, len(df)))
 
@@ -267,6 +279,7 @@ if __name__ == "__main__":
 
   activeCellNum = []
   predCellNum = []
+  predSegmentNum = []
   predictedActiveColumnsNum = []
   trueBucketIndex = []
   sp = model._getSPRegion().getSelf()._sfdr
@@ -278,11 +291,13 @@ if __name__ == "__main__":
     inputRecord = getInputRecord(df, predictedField, i)
     tp = model._getTPRegion()
     tm = tp.getSelf()._tfdr
-    prePredictiveCells = tm.predictiveCells
+    prePredictiveCells = tm.getPredictiveCells()
     prePredictiveColumn = np.array(list(prePredictiveCells)) / tm.cellsPerColumn
 
     result = model.run(inputRecord)
     trueBucketIndex.append(model._getClassifierInputRecord(inputRecord).bucketIndex)
+
+    predSegmentNum.append(len(tm.activeSegments))
 
     sp = model._getSPRegion().getSelf()._sfdr
     spOutput = model._getSPRegion().getOutputData('bottomUpOut')
@@ -313,7 +328,7 @@ if __name__ == "__main__":
     tm = tp.getSelf()._tfdr
     tpOutput = tm.infActiveState['t']
 
-    predictiveCells = tm.predictiveCells
+    predictiveCells = tm.getPredictiveCells()
     predCellNum.append(len(predictiveCells))
     predColumn = np.array(list(predictiveCells))/ tm.cellsPerColumn
 
@@ -350,7 +365,6 @@ if __name__ == "__main__":
       result.inferences["multiStepBestPredictions"][_options.stepsAhead]
     output.write([i], [inputRecord[predictedField]], [float(prediction_nstep)])
 
-
     bucketLL = \
       result.inferences['multiStepBucketLikelihoods'][_options.stepsAhead]
     likelihoodsVec = np.zeros((maxBucket,))
@@ -365,7 +379,6 @@ if __name__ == "__main__":
     negLL_track.append(negLL)
 
     likelihoodsVecAll[0:len(likelihoodsVec), i] = likelihoodsVec
-
 
     if plot and i > 500:
       # prepare data for display
@@ -388,12 +401,16 @@ if __name__ == "__main__":
                  extent=(time_step_display[0], time_step_display[-1], 0, 40000),
                  interpolation='nearest', aspect='auto',
                  origin='lower', cmap='Reds')
+      plt.colorbar()
       plt.plot(time_step_display, actual_data_display, 'k', label='Data')
       plt.plot(time_step_display, predict_data_ML_display, 'b', label='Best Prediction')
       plt.xlim(xl)
       plt.xlabel('Time')
       plt.ylabel('Prediction')
-      plt.title('TM, useTimeOfDay='+str(True)+' '+dataSet+' test neg LL = '+str(negLL))
+      # plt.title('TM, useTimeOfDay='+str(True)+' '+dataSet+' test neg LL = '+str(np.nanmean(negLL)))
+      plt.xlim([17020, 17300])
+      plt.ylim([0, 30000])
+      plt.clim([0, 1])
       plt.draw()
 
   predData_TM_n_step = np.roll(np.array(predict_data_ML), _options.stepsAhead)
@@ -430,8 +447,27 @@ if __name__ == "__main__":
   plt.figure()
   plotAccuracy((negLL, x), truth, window=480, errorType='negLL')
 
-  np.save('./result/'+dataSet+'TMprediction.npy', predictions)
-  np.save('./result/'+dataSet+'TMtruth.npy', truth)
+  np.save('./result/'+dataSet+classifierType+'TMprediction.npy', predictions)
+  np.save('./result/'+dataSet+classifierType+'TMtruth.npy', truth)
 
+  plt.figure()
+  activeCellNumAvg = movingAverage(activeCellNum, 100)
+  plt.plot(np.array(activeCellNumAvg)/tm.numberOfCells())
+  plt.xlabel('data records')
+  plt.ylabel('sparsity')
+  plt.xlim([0, 5000])
 
+  plt.savefig('result/sparsity_over_training.pdf')
 
+  plt.figure()
+  predCellNumAvg = movingAverage(predCellNum, 100)
+  predSegmentNumAvg = movingAverage(predSegmentNum, 100)
+  # plt.plot(np.array(predCellNumAvg))
+  plt.plot(np.array(predSegmentNumAvg),'r', label='NMDA spike')
+  plt.plot(activeCellNumAvg,'b', label='spikes')
+  plt.xlabel('data records')
+  plt.ylabel('NMDA spike #')
+  plt.legend()
+  plt.xlim([0, 5000])
+  plt.ylim([0, 42])
+  plt.savefig('result/nmda_spike_over_training.pdf')

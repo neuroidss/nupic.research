@@ -21,22 +21,43 @@
 
 """Module providing a factory for instantiating a temporal memory instance."""
 
-from nupic.research.temporal_memory import TemporalMemory
-from htmresearch.algorithms.general_temporal_memory import (
-  GeneralTemporalMemory)
-from nupic.research.monitor_mixin.temporal_memory_monitor_mixin import (
-  TemporalMemoryMonitorMixin)
+import inspect
 
-class MonitoredTemporalMemory(TemporalMemoryMonitorMixin, TemporalMemory): pass
+from htmresearch.support.apical_tm_pair_monitor_mixin import (
+  ApicalTMPairMonitorMixin)
+from nupic.algorithms.temporal_memory import TemporalMemory as TemporalMemoryPY
+from nupic.bindings.algorithms import TemporalMemory as TemporalMemoryCPP
+from nupic.algorithms.monitor_mixin.temporal_memory_monitor_mixin import (
+  TemporalMemoryMonitorMixin)
+from htmresearch_core.experimental import ApicalTiebreakPairMemory
+
+
+
+class MonitoredTemporalMemoryPY(TemporalMemoryMonitorMixin, TemporalMemoryPY):
+  pass
+
+
+class MonitoredTemporalMemoryCPP(TemporalMemoryMonitorMixin, TemporalMemoryCPP):
+  pass
+
+
+class MonitoredApicalTiebreakPairMemoryCPP(ApicalTMPairMonitorMixin,
+                                           ApicalTiebreakPairMemory):
+  pass
+
+
 
 class TemporalMemoryTypes(object):
   """ Enumeration of supported classification model types, mapping userland
   identifier to constructor.  See createModel() for actual factory method
   implementation.
   """
-  general = GeneralTemporalMemory
-  tm = TemporalMemory
-  tmMixin = MonitoredTemporalMemory
+  etm = ApicalTiebreakPairMemory
+  monitored_etm = MonitoredApicalTiebreakPairMemoryCPP
+  tm_py = TemporalMemoryPY
+  tm_cpp = TemporalMemoryCPP
+  monitored_tm_py = MonitoredTemporalMemoryPY
+  monitored_tm_cpp = MonitoredTemporalMemoryCPP
 
 
   @classmethod
@@ -50,7 +71,7 @@ class TemporalMemoryTypes(object):
     for attrName in dir(cls):
       attrValue = getattr(cls, attrName)
       if (isinstance(attrValue, type)):
-        yield attrName # attrName is an acceptable model name and
+        yield attrName
 
 
 def createModel(modelName, **kwargs):
@@ -73,14 +94,20 @@ def createModel(modelName, **kwargs):
 
 def getConstructorArguments(modelName):
   """
-  Return a list of strings corresponding to constructor arguments for the
+  Return constructor arguments and associated default values for the
   given model type.
 
   @param modelName (str)  A supported temporal memory type
 
+  @return argNames (list of str) a list of strings corresponding to constructor
+                                 arguments for the given model type, excluding
+                                 'self'.
+  @return defaults (list)        a list of default values for each argument
   """
 
   if modelName not in TemporalMemoryTypes.getTypes():
     raise RuntimeError("Unknown model type: " + modelName)
 
-  return getattr(TemporalMemoryTypes, modelName)(**kwargs)
+  argspec = inspect.getargspec(
+                            getattr(TemporalMemoryTypes, modelName).__init__)
+  return (argspec.args[1:], argspec.defaults)

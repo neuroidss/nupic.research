@@ -26,7 +26,7 @@ import plotly.plotly as py
 from plotly.graph_objs import *
 import os
 
-plotlyUser = os.environ['PLOTLY_USER_NAME']
+plotlyUser = os.environ['PLOTLY_USERNAME']
 plotlyAPIKey = os.environ['PLOTLY_API_KEY']
 
 
@@ -125,14 +125,14 @@ layout = Layout(
         title='$\\text{No. of synapses required for dendritic spike } ('
               '\\theta)$',
         titlefont=Font(
-            family='',
-            size=22,
-            color=''
+            family='Arial',
+            size=24,
+            color='rgb(0, 0, 0)',
         ),
         tickfont=Font(
-            family='',
-            size=18,
-            color=''
+            family='Arial',
+            size=24,
+            color='rgb(0, 0, 0)',
         ),
         showline=True,
     ),
@@ -142,15 +142,16 @@ layout = Layout(
         exponentformat='power',
         autorange=True,
         titlefont=Font(
-            family='',
-            size=22,
-            color=''
+            family='Arial',
+            size=24,
+            color='rgb(0, 0, 0)',
         ),
         tickfont=Font(
-            family='',
+            family='Arial',
             size=16,
-            color=''
+            color='rgb(0, 0, 0)',
         ),
+        # showticklabels=False,
         showline=True,
     ),
     annotations=Annotations([
@@ -162,9 +163,9 @@ layout = Layout(
             text='Median false positive error',
             showarrow=True,
             font=Font(
-                family='',
-                size=18,
-                color=''
+                family='Arial',
+                size=24,
+                color='rgb(0, 0, 0)',
             ),
             xanchor='auto',
             yanchor='auto',
@@ -183,16 +184,16 @@ layout = Layout(
             opacity=1
         ),
     Annotation(
-          x=8.79611650485437,
+          x=9.79611650485437,
           y=0.46153846153846156,
           xref='x',
           yref='paper',
           text='$\\text{Error rate} \leq 10^{-9}$',
           showarrow=True,
           font=Font(
-              family='',
-              size=18,
-              color=''
+              family='Arial',
+              size=24,
+              color='rgb(0, 0, 0)',
           ),
           xanchor='auto',
           yanchor='auto',
@@ -214,7 +215,7 @@ layout = Layout(
 )
 
 fig = Figure(data=data, layout=layout)
-plot_url = py.plot(fig)
+plot_url = py.plot(fig, auto_open=False)
 print "url=",plot_url
 figure = py.get_figure(plot_url)
-py.image.save_as(figure, 'optimal_threshold.png', scale=2)
+py.image.save_as(figure, 'images/optimal_threshold.pdf', scale=2)

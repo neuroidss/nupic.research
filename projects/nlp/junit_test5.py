@@ -36,16 +36,21 @@ from htmresearch.support.junit_testing import (
   printRankResults, setupExperiment, testModel)
 
 
+# Dataset info
+CATEGORY_SIZE = 6
+NUMBER_OF_DOCS = 108
+
+
 
 def runExperiment(args):
   """ Build a model and test it."""
   model, dataSet = setupExperiment(args)
 
-  ranks = testModel(model,
+  allRanks, avgRanks, avgStats  = testModel(model,
                     [d for d in dataSet if d[2]%100==0],
-                    categorySize=5,
+                    categorySize=6,
                     verbosity=args.verbosity)
-  printRankResults("JUnit4", ranks)
+  printRankResults("JUnit5", avgRanks, avgStats)
 
   return model
 
@@ -70,7 +75,7 @@ if __name__ == "__main__":
                       default="MODELNAME.checkpoint",
                       help="Model will be saved in this directory.")
   parser.add_argument("--retina",
-                      default="en_associative_64_univ",
+                      default="en_synonymous",
                       type=str,
                       help="Name of Cortical.io retina.")
   parser.add_argument("--apiKey",

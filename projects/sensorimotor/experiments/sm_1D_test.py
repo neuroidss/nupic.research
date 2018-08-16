@@ -29,14 +29,14 @@
 import numpy
 
 from nupic.bindings.math import GetNTAReal
-from nupic.research.temporal_memory_inspect_mixin import  (
+from nupic.algorithms.temporal_memory_inspect_mixin import  (
   TemporalMemoryInspectMixin)
 
 from sensorimotor.one_d_world import OneDWorld
 from sensorimotor.one_d_universe import OneDUniverse
 from sensorimotor.random_one_d_agent import RandomOneDAgent
-from sensorimotor.general_temporal_memory import (
-            GeneralTemporalMemory
+from sensorimotor.extended_temporal_memory import (
+            ApicalTiebreakPairMemory
 )
 
 
@@ -52,7 +52,7 @@ first order representation of this sequence.
 realDType = GetNTAReal()
 
 # Mixin class for TM statistics
-class TMI(TemporalMemoryInspectMixin,GeneralTemporalMemory): pass
+class TMI(TemporalMemoryInspectMixin, ApicalTiebreakPairMemory): pass
 
 
 def feedTM(tm, length, agents,
@@ -69,10 +69,12 @@ def feedTM(tm, length, agents,
     for i in xrange(len(sensorSequence)):
       sensorPattern = sensorSequence[i]
       sensorimotorPattern = sensorimotorSequence[i]
+      prevSensorimotorPattern = (sensorimotorSequence[i-1] if i >= 0 else ())
       tm.compute(sensorPattern,
-                activeExternalCells=sensorimotorPattern,
-                formInternalConnections=False,
-                learn=learn)
+                 activeCellsExternalBasal=sensorimotorPattern,
+                 reinforceCandidatesExternalBasal=prevSensorimotorPattern,
+                 growthCandidatesExternalBasal=prevSensorimotorPattern,
+                 learn=learn)
 
   if verbosity >= 2:
     print tm.prettyPrintHistory(verbosity=verbosity)
@@ -105,6 +107,7 @@ agents = [
 # The TM parameters
 DEFAULT_TM_PARAMS = {
   "columnDimensions": [nElements*wEncoders],
+  "basalInputDimensions": (999999,) # Dodge input checking.
   "cellsPerColumn": 8,
   "initialPermanence": 0.5,
   "connectedPermanence": 0.6,
@@ -112,7 +115,8 @@ DEFAULT_TM_PARAMS = {
   "maxNewSynapseCount": wEncoders*2,
   "permanenceIncrement": 0.1,
   "permanenceDecrement": 0.02,
-  "activationThreshold": wEncoders*2
+  "activationThreshold": wEncoders*2,
+  "formInternalBasalConnections": False,
 }
 
 tm = TMI(**dict(DEFAULT_TM_PARAMS))

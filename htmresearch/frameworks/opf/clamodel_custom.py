@@ -20,10 +20,10 @@
 # ----------------------------------------------------------------------
 
 
-from nupic.frameworks.opf.clamodel import CLAModel
+from nupic.frameworks.opf.htm_prediction_model import HTMPredictionModel
 from nupic.frameworks.opf.opfutils import (InferenceType)
 
-class CLAModel_custom(CLAModel):
+class CLAModel_custom(HTMPredictionModel):
 
   def __init__(self,
                **kwargs):
@@ -44,6 +44,7 @@ class CLAModel_custom(CLAModel):
     sp.setParameter('learningMode', self._spLearningEnabled)
     sp.prepareInputs()
     sp.compute()
+    sp.purgeInputLinkBufferHeads()
 
   # overide _tpCompute
   def _tpCompute(self):
@@ -63,3 +64,4 @@ class CLAModel_custom(CLAModel):
     tp.setParameter('learningMode', self._tpLearningEnabled)
     tp.prepareInputs()
     tp.compute()
+    tp.purgeInputLinkBufferHeads()

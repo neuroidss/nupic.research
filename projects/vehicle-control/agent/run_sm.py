@@ -29,12 +29,12 @@ import numpy
 from unity_client.server import Server
 from nupic.encoders.coordinate import CoordinateEncoder
 from nupic.encoders.scalar import ScalarEncoder
-from nupic.research.monitor_mixin.trace import CountsTrace
-from sensorimotor.general_temporal_memory import GeneralTemporalMemory
-from nupic.research.monitor_mixin.temporal_memory_monitor_mixin import (
-  TemporalMemoryMonitorMixin)
-class MonitoredGeneralTemporalMemory(TemporalMemoryMonitorMixin,
-                                     GeneralTemporalMemory): pass
+from nupic.algorithms.monitor_mixin.trace import CountsTrace
+from sensorimotor.extended_temporal_memory import ApicalTiebreakPairMemory
+from htmresearch.support.apical_tm_pair_monitor_mixin import (
+  ApicalTMPairMonitorMixin)
+class MonitoredApicalTiebreakPairMemory(
+  ApicalTMPairMonitorMixin, ApicalTiebreakPairMemory): pass
 
 
 
@@ -50,8 +50,9 @@ class Agent(object):
                                 w=21)
     self.motorEncoder = ScalarEncoder(21, -1, 1,
                                  n=1024)
-    self.tm = MonitoredGeneralTemporalMemory(
+    self.tm = MonitoredApicalTiebreakPairMemory(
       columnDimensions=[2048],
+      basalInputDimensions: (999999,) # Dodge input checking.
       cellsPerColumn=1,
       initialPermanence=0.5,
       connectedPermanence=0.6,
@@ -64,6 +65,7 @@ class Agent(object):
 
     self.lastState = None
     self.lastAction = None
+    self.prevMotorPattern = ()
 
 
   def sync(self, outputData):
@@ -92,8 +94,9 @@ class Agent(object):
     motorPattern = set(motorEncoding.nonzero()[0])
 
     self.tm.compute(sensorPattern,
-                    activeExternalCells=motorPattern,
-                    formInternalConnections=True)
+                    activeCellsExternalBasal=motorPattern,
+                    reinforceCandidatesExternalBasal=self.prevMotorPattern,
+                    growthCandidatesExternalBasal=self.prevMotorPattern)
 
     print self.tm.mmPrettyPrintMetrics(self.tm.mmGetDefaultMetrics())
 
@@ -104,6 +107,7 @@ class Agent(object):
 
     self.lastState = encoding
     self.lastAction = steer
+    self.prevMotorPattern = motorPattern
 
 
 

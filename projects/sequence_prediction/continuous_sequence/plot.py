@@ -25,29 +25,11 @@ import argparse
 from matplotlib import pyplot as plt
 plt.ion()
 
-from suite import Suite
-from errorMetrics import *
+# from suite import Suite
+from run_lstm_suite import Suite
+from htmresearch.support.sequence_learning_utils import *
 import pandas as pd
 import numpy as np
-
-def movingAverage(a, n):
-  movingAverage = []
-
-  for i in xrange(len(a)):
-    start = max(0, i - n)
-    end = i+1
-    #
-    # start = i
-    # end = min(len(a), i + n)
-
-    # start = max(0, i-n/2)
-    # end = min(len(a), i+n/2)
-    #
-    values = a[start:end]
-    movingAverage.append(sum(values) / float(len(values)))
-
-  return movingAverage
-
 
 
 def plotMovingAverage(data, window, label=None):
@@ -56,84 +38,6 @@ def plotMovingAverage(data, window, label=None):
   plt.plot(range(len(movingData)), movingData, style, label=label)
 
 
-
-def plotAccuracy(results, truth, train=None, window=100, label=None, params=None, errorType=None):
-  plt.title('Prediction Error Over Time')
-
-  error = results[0]
-
-  x = results[1]
-  x = x[:len(error)]
-
-  # print results
-  # print params['compute_after']
-  # if params is not None:
-  #   error[np.where(x < params['compute_after'])[0]] = np.nan
-
-  error[:5904] = np.nan
-
-  movingData = movingAverage(error, min(len(error), window))
-
-  if errorType == 'square_deviation':
-    print label, " Avg NRMSE:", np.sqrt(np.nanmean(error))/np.nanstd(truth)
-    meanError = np.sqrt(np.nanmean(error))/np.nanstd(truth)
-    avgError = np.sqrt(np.array(movingData))/np.nanstd(truth)
-  elif errorType == 'negLL':
-    print label, " Avg negLL:", np.nanmean(error)
-    meanError = np.nanmean(error)
-    avgError = movingData
-  elif errorType == 'mape':
-
-    normFactor = np.nanstd(truth)
-    print label, " MAPE:", np.nanmean(error)  / normFactor
-    meanError = np.nanmean(error) / normFactor
-    avgError = movingData / normFactor
-  else:
-    raise NotImplementedError
-
-  plt.plot(x, avgError, label=label)
-  plt.xlabel("# of elements seen")
-  plt.ylabel("{0} over last {1} record".format(errorType, window))
-  if train is not None:
-    for i in xrange(len(train)):
-      if train[i]:
-        plt.axvline(x[i], color='orange')
-
-  if params is not None:
-    if params['perturb_after'] < len(x):
-      plt.axvline(x[params['perturb_after']], color='black', linestyle='--')
-
-  plt.xlim(x[0], x[len(x)-1])
-  return error
-
-  # plt.ylim(0, 1.001)
-
-
-def computeSquareDeviation(predictions, truth):
-
-  square_deviation = np.square(predictions-truth)
-
-  return square_deviation
-
-
-def computeLikelihood(predictions, truth, encoder):
-  targetDistribution = np.zeros(predictions.shape)
-  for i in xrange(len(truth)):
-    if not np.isnan(truth[i]) and truth is not None:
-      targetDistribution[i, :] = encoder.encode(truth[i])
-
-  # calculate negative log-likelihood
-  Likelihood = np.multiply(predictions, targetDistribution)
-  Likelihood = np.sum(Likelihood, axis=1)
-
-  minProb = 0.01
-  Likelihood[np.where(Likelihood < minProb)[0]] = minProb
-  negLL = -np.log(Likelihood)
-
-  return negLL
-
-def computeAbsouteError(predictions, truth):
-  return np.abs( (predictions-truth))
 
 class ExperimentResult(object):
   def __init__(self, experiment_name):
@@ -149,25 +53,32 @@ class ExperimentResult(object):
     experiment_dir = experiment.split('/')[1]
     params = suite.items_to_params(suite.cfgparser.items(experiment_dir))
     self.params = params
-
     predictions = suite.get_history(experiment, 0, 'predictions')
     truth = suite.get_history(experiment, 0, 'truth')
+
+    computeAfter = params['iterations']-len(predictions)
+    temp = np.zeros((computeAfter, ))
+    temp[:] = np.nan
 
     self.iteration = suite.get_history(experiment, 0, 'iteration')
     self.train = suite.get_history(experiment, 0, 'train')
 
     self.truth = np.array(truth, dtype=np.float)
 
+    self.truth = np.concatenate((temp, self.truth))
+
     if params['output_encoding'] == 'likelihood':
       from nupic.encoders.scalar import ScalarEncoder as NupicScalarEncoder
       self.outputEncoder = NupicScalarEncoder(w=1, minval=0, maxval=40000, n=22, forced=True)
-      predictions_np = np.zeros((len(predictions), self.outputEncoder.n))
+      # predictions_np = np.zeros((len(predictions), self.outputEncoder.n))
+      predictions_np = np.zeros((len(predictions)+computeAfter, self.outputEncoder.n))
       for i in xrange(len(predictions)):
         if predictions[i] is not None:
-          predictions_np[i, :] = np.array(predictions[i])
+          predictions_np[i+computeAfter, :] = np.array(predictions[i])
       self.predictions = predictions_np
     else:
       self.predictions = np.array(predictions, dtype=np.float)
+      self.predictions = np.concatenate((temp, self.predictions))
 
   def computeError(self):
     if self.params['output_encoding'] == 'likelihood':
@@ -191,7 +102,7 @@ def plotLSTMresult(experiment, window, xaxis=None, label=None):
 
   error = plotAccuracy((expResult.error, x),
                            expResult.truth,
-                           train=expResult.train,
+                           # train=expResult.train,
                            window=window,
                            label=label,
                            params=expResult.params,
