@@ -33,7 +33,6 @@ import numpy as np
 
 from htmresearch.algorithms.apical_tiebreak_temporal_memory import (
   ApicalTiebreakPairMemory)
-from htmresearch.algorithms.column_pooler import ColumnPooler
 from htmresearch.algorithms.location_modules import (
   Superficial2DLocationModule, ThresholdedGaussian2DLocationModule)
 
@@ -41,8 +40,74 @@ from htmresearch.algorithms.location_modules import (
 RAT_BUMP_SIGMA = 0.18172
 
 
-def createRatModule(inverseReadoutResolution, scale, enlargeModuleFactor=1.,
-                    **kwargs):
+def computeRatModuleParametersFromCellCount(cellsPerAxis,
+                                            baselineCellsPerAxis=6):
+  """
+  Compute 'cellsPerAxis', 'bumpSigma', and 'activeFiringRate' parameters for
+  :class:`ThresholdedGaussian2DLocationModule` given the number of cells per
+  axis. See :func:`createRatModuleFromCellCount`
+  """
+  bumpSigma = RAT_BUMP_SIGMA * (baselineCellsPerAxis / float(cellsPerAxis))
+  activeFiringRate = ThresholdedGaussian2DLocationModule.chooseReliableActiveFiringRate(
+    cellsPerAxis, bumpSigma)
+
+  return {
+    "cellsPerAxis": cellsPerAxis,
+    "bumpSigma": bumpSigma,
+    "activeFiringRate": activeFiringRate
+  }
+
+
+def computeRatModuleParametersFromReadoutResolution(inverseReadoutResolution,
+                                                    enlargeModuleFactor=1.):
+  """
+  Compute 'cellsPerAxis', 'bumpSigma', and 'activeFiringRate' parameters for
+  :class:`ThresholdedGaussian2DLocationModule` given the
+  inverseReadoutResolution. See :func:`createRatModuleFromReadoutResolution`
+  """
+  # Give the module enough precision in its learning so that the bump is the
+  # specified diameter when properly accounting for uncertainty.
+  cellsPerAxis = int(math.ceil(2*inverseReadoutResolution*enlargeModuleFactor))
+
+  bumpSigma = RAT_BUMP_SIGMA / enlargeModuleFactor
+
+  readoutResolution = 1. / (enlargeModuleFactor*inverseReadoutResolution)
+  activeFiringRate = ThresholdedGaussian2DLocationModule.chooseReliableActiveFiringRate(
+    cellsPerAxis, bumpSigma, readoutResolution)
+
+  return {
+    "cellsPerAxis": cellsPerAxis,
+    "bumpSigma": bumpSigma,
+    "activeFiringRate": activeFiringRate
+  }
+
+
+def createRatModuleFromCellCount(cellsPerAxis, baselineCellsPerAxis=6,
+                                 **kwargs):
+  """
+  @param baselineCellsPerAxis (int or float)
+  When cellsPerAxis == baselineCellsPerAxis, the bump of firing rates will
+  resemble a bump in rat entorhinal cortex. We'll then apply a threshold to this
+  firing rate, converting the bump into 4 - 7 active cells (It could be 2x2
+  cells, or it could be a hexagon of cells, depending on where the bump is
+  relative to the cells). As cellsPerAxis grows, the bump of firing rates and
+  bump of active cells will stay fixed relative to the cells, so they will
+  shrink relative to the module as a whole. Given this approach, the
+  baselineCellsPerAxis implies the readout resolution of a grid cell module.
+  Because the bump of thresholded active cells will always be the same size, if
+  baselineCellsPerAxis=6, that implies that the readout resolution is
+  approximately 1/3. If baselineCellsPerAxis=8, the readout resolution is
+  approximately 1/4.
+  """
+  params = computeRatModuleParametersFromCellCount(cellsPerAxis,
+                                                   baselineCellsPerAxis)
+  params.update(kwargs)
+  return ThresholdedGaussian2DLocationModule(**params)
+
+
+def createRatModuleFromReadoutResolution(inverseReadoutResolution, scale,
+                                         enlargeModuleFactor=1.,
+                                         fixedScale=False, **kwargs):
   """
   @param inverseReadoutResolution (int or float)
   Equivalent to 1/readoutResolution, but specified this way as a convenience
@@ -59,22 +124,19 @@ def createRatModule(inverseReadoutResolution, scale, enlargeModuleFactor=1.,
   the bump, increases the precision of the readout, adds more cells, and
   increases the scale so that the bump is the same size when overlayed on the
   real world.
+
+  @param fixedScale (bool)
+  By default, the enlargeModuleFactor will increase the scale, effectively
+  holding the bump size constant relative to physical space. Set this to True to
+  hold the scale constant, so enlarging the module causes the bump size to
+  shrink relative to physical space.
   """
 
-  # Give the module enough precision in its learning so that the bump is the
-  # specified diameter when properly accounting for uncertainty.
-  learningCellsPerAxis = int(math.ceil(2*inverseReadoutResolution*enlargeModuleFactor))
-
-  readoutResolution = 1. / (enlargeModuleFactor*inverseReadoutResolution)
-  activeFiringRate = ThresholdedGaussian2DLocationModule.chooseReliableActiveFiringRate(
-    learningCellsPerAxis, RAT_BUMP_SIGMA, readoutResolution)
-
-  return ThresholdedGaussian2DLocationModule(
-    cellsPerAxis=learningCellsPerAxis,
-    activeFiringRate=activeFiringRate,
-    bumpSigma=RAT_BUMP_SIGMA,
-    scale=scale*enlargeModuleFactor,
-    **kwargs)
+  params = computeRatModuleParametersFromReadoutResolution(inverseReadoutResolution,
+                                                           enlargeModuleFactor)
+  params.update(kwargs)
+  params["scale"] = (scale if fixedScale else scale * enlargeModuleFactor)
+  return ThresholdedGaussian2DLocationModule(**params)
 
 
 class PIUNCorticalColumn(object):
@@ -87,7 +149,7 @@ class PIUNCorticalColumn(object):
   arrives, call sensoryCompute.
   """
 
-  def __init__(self, locationConfigs, L4Overrides=None, useGaussian=False):
+  def __init__(self, locationConfigs, L4Overrides=None, bumpType="gaussian"):
     """
     @param L4Overrides (dict)
     Custom parameters for L4
@@ -95,26 +157,35 @@ class PIUNCorticalColumn(object):
     @param locationConfigs (sequence of dicts)
     Parameters for the location modules
     """
+    self.bumpType = bumpType
+
     L4cellCount = 150*16
-    if useGaussian:
+    if bumpType == "gaussian":
       self.L6aModules = [
-        createRatModule(
+        createRatModuleFromCellCount(
           anchorInputSize=L4cellCount,
           **config)
         for config in locationConfigs]
-    else:
+    elif bumpType == "gaussian2":
+      self.L6aModules = [
+        createRatModuleFromReadoutResolution(
+          anchorInputSize=L4cellCount,
+          **config)
+        for config in locationConfigs]
+    elif bumpType == "square":
       self.L6aModules = [
         Superficial2DLocationModule(
           anchorInputSize=L4cellCount,
           **config)
         for config in locationConfigs]
+    else:
+      raise ValueError("Invalid bumpType", bumpType)
 
     L4Params = {
       "columnCount": 150,
       "cellsPerColumn": 16,
-      "basalInputSize": (len(locationConfigs) *
-                         sum(module.numberOfCells()
-                             for module in self.L6aModules))
+      "basalInputSize": sum(module.numberOfCells()
+                            for module in self.L6aModules)
     }
 
     if L4Overrides is not None:
@@ -351,9 +422,16 @@ class PIUNExperiment(object):
     {"name": "Object 1",
      "features": [{"top": 0, "left": 0, "width": 10, "height": 10, "name": "A"},
                   {"top": 0, "left": 10, "width": 10, "height": 10, "name": "B"}]}
+
+    @return locationsAreUnique (bool)
+    True if this object was assigned a unique set of locations. False if a
+    location on this object has the same location representation as another
+    location somewhere else.
     """
     self.reset()
     self.column.activateRandomLocation()
+
+    locationsAreUnique = True
 
     if randomLocation or useNoise:
       numIters = noisyTrainingTime
@@ -372,9 +450,15 @@ class PIUNExperiment(object):
                                    iFeature, feature["name"])] = (
                                      self.column.L4.getWinnerCells())
 
+        locationTuple = tuple(locationRepresentation)
+        locationsAreUnique = (locationsAreUnique and
+                              locationTuple not in self.representationSet)
+
         self.representationSet.add(tuple(locationRepresentation))
 
     self.learnedObjects.append(objectDescription)
+
+    return locationsAreUnique
 
 
   def inferObjectWithRandomMovements(self,
@@ -462,6 +546,9 @@ class PIUNExperiment(object):
 
       if finished:
         break
+
+    for monitor in self.monitors.values():
+      monitor.afterInferObject(objectDescription, inferredStep)
 
     return inferredStep
 
@@ -582,6 +669,7 @@ class PIUNExperimentMonitor(object):
   def beforeSense(self, featureSDR): pass
   def beforeSensoryRepetition(self): pass
   def beforeInferObject(self, obj): pass
+  def afterInferObject(self, obj, inferredStep): pass
   def afterReset(self): pass
   def afterLocationChanged(self, locationOnObject): pass
   def afterLocationInitialize(self): pass

@@ -64,12 +64,12 @@ def chart():
   # Generated with:
   # TODO
 
-  for totalCells in (5000,):
+  for totalCells in (5000, 10000):
     accuracies = collections.defaultdict(list)
     capacities = {}
     for modules in (1, 2, 3, 4, 5, 6, 7, 8):
       numCells = (int(math.sqrt(int(totalCells / modules))) ** 2) * modules
-      with open("results/fixed_cells_5000_cells_{}_modules.json".format(str(modules)), "r") as f:
+      with open("results/fixed_cells_{}_cells_{}_modules.json".format(str(totalCells), str(modules)), "r") as f:
         data = json.load(f)
       for exp in data:
         modSize = np.prod(exp[0]["cellDimensions"])
@@ -77,7 +77,7 @@ def chart():
         k = (modSize, numFeatures)
         numObjects = exp[0]["numObjects"]
 
-        failed = exp[1].get("null", 0)
+        failed = exp[1]["convergence"].get("null", 0)
         accuracy = (float(numObjects) - float(failed)) / float(numObjects)
 
         accuracies[modules].append((numObjects, accuracy))

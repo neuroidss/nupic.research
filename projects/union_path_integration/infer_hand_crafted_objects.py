@@ -33,7 +33,8 @@ import numpy as np
 
 from htmresearch.frameworks.location.path_integration_union_narrowing import (
   PIUNCorticalColumn, PIUNExperiment)
-from two_layer_tracing import PIUNVisualizer as trace
+from htmresearch.frameworks.location.two_layer_tracing import (
+  PIUNVisualizer as trace)
 
 
 OBJECTS = [
@@ -111,7 +112,7 @@ def doPointsExperiment(cellDimensions, cellCoordinateOffsets):
     "initialPermanence": 1.0,
   }
 
-  column = PIUNCorticalColumn(locationConfigs, L4Overrides, useGaussian=False)
+  column = PIUNCorticalColumn(locationConfigs, L4Overrides, bumpType="square")
   exp = PIUNExperiment(column, featureNames=("A", "B"))
 
   for objectDescription in OBJECTS:
@@ -168,7 +169,7 @@ def doGaussianExperiment(inverseReadoutResolution):
     "initialPermanence": 1.0,
   }
 
-  column = PIUNCorticalColumn(locationConfigs, L4Overrides, useGaussian=True)
+  column = PIUNCorticalColumn(locationConfigs, L4Overrides, bumpType="gaussian2")
   exp = PIUNExperiment(column, featureNames=("A", "B"))
 
   for objectDescription in OBJECTS:
